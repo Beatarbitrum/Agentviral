@@ -14,11 +14,13 @@ function hdr(extra: Record<string, string> = {}) {
   return { apikey: SB_KEY(), Authorization: `Bearer ${SB_KEY()}`, ...extra };
 }
 
-async function rest(path: string, init: RequestInit = {}) {
+// cached=true: cacheable GET for public (ISR) pages, invalidated by revalidateSite() via tag.
+// Everything else (admin, writes) bypasses the cache.
+async function rest(path: string, init: RequestInit = {}, cached?: { tag: string; revalidate: number }) {
   const res = await fetch(`${SB_URL()}/rest/v1/${path}`, {
     ...init,
     headers: hdr({ "Content-Type": "application/json", ...(init.headers as Record<string, string>) }),
-    cache: "no-store",
+    ...(cached ? { next: { revalidate: cached.revalidate, tags: [cached.tag] } } : { cache: "no-store" as const }),
   });
   if (!res.ok) throw new Error(`Supabase ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const t = await res.text();
@@ -37,7 +39,7 @@ export async function readDoc<T>(name: string, fallback: T, opts: { fresh?: bool
   const c = memo.get(name);
   if (!opts.fresh && c && Date.now() - c.at < TTL) return { value: c.value as T, etag: c.etag };
   try {
-    const rows = (await rest(`docs?name=eq.${encodeURIComponent(name)}&select=value,version`)) as { value: T; version: number }[];
+    const rows = (await rest(`docs?name=eq.${encodeURIComponent(name)}&select=value,version`, {}, opts.fresh ? undefined : { tag: "docs", revalidate: 300 })) as { value: T; version: number }[];
     if (!rows?.length) {
       memo.set(name, { at: Date.now(), value: fallback, etag: "0" });
       return { value: fallback, etag: "0" };
@@ -111,7 +113,7 @@ export async function readViews(): Promise<Record<string, number>> {
   if (!hasBlob()) return {};
   if (viewsCache && Date.now() - viewsCache.at < VIEWS_TTL) return viewsCache.value;
   try {
-    const rows = (await rest("views?select=id,n")) as { id: string; n: number }[];
+    const rows = (await rest("views?select=id,n", {}, { tag: "views", revalidate: 300 })) as { id: string; n: number }[];
     const value = Object.fromEntries(rows.map((r) => [r.id, Number(r.n)]));
     viewsCache = { at: Date.now(), value };
     return value;
