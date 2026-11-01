@@ -27,7 +27,10 @@ async function rest(path: string, init: RequestInit = {}) {
 
 type Cached = { at: number; value: unknown; etag?: string };
 const memo = new Map<string, Cached>();
-const TTL = 120_000;
+// Cache per-instance singkat: cukup untuk menggabungkan bacaan berulang dalam satu render
+// (layout + halaman), tapi tidak membuat regenerasi ISR setelah terbit memakai data basi.
+const TTL = 15_000;
+const VIEWS_TTL = 120_000;
 
 export async function readDoc<T>(name: string, fallback: T, opts: { fresh?: boolean } = {}): Promise<{ value: T; etag?: string }> {
   if (!hasBlob()) return { value: fallback };
@@ -72,9 +75,11 @@ export async function writeDoc(name: string, value: unknown, ifMatch?: string): 
 }
 
 /** Read-modify-write with optimistic concurrency, retried. */
-export async function updateDoc<T>(name: string, fallback: T, fn: (cur: T) => T | Promise<T>): Promise<T> {
+export async function updateDoc<T>(name: string, fallback: T, fn: (cur: T) => T | Promise<T>, initial?: Promise<{ value: T; etag?: string }>): Promise<T> {
   for (let attempt = 0; attempt < 4; attempt++) {
-    const { value, etag } = await readDoc<T>(name, fallback, { fresh: true });
+    // Percobaan pertama boleh memakai bacaan segar yang sudah dimulai paralel oleh pemanggil;
+    // tetap aman karena penulisan memakai compare-and-swap (versi) dan diulang bila konflik.
+    const { value, etag } = attempt === 0 && initial ? await initial : await readDoc<T>(name, fallback, { fresh: true });
     const next = await fn(structuredClone(value));
     try {
       await writeDoc(name, next, etag ?? "0");
@@ -104,7 +109,7 @@ export async function deleteDoc(name: string) {
 let viewsCache: { at: number; value: Record<string, number> } | null = null;
 export async function readViews(): Promise<Record<string, number>> {
   if (!hasBlob()) return {};
-  if (viewsCache && Date.now() - viewsCache.at < TTL) return viewsCache.value;
+  if (viewsCache && Date.now() - viewsCache.at < VIEWS_TTL) return viewsCache.value;
   try {
     const rows = (await rest("views?select=id,n")) as { id: string; n: number }[];
     const value = Object.fromEntries(rows.map((r) => [r.id, Number(r.n)]));

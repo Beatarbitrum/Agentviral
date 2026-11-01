@@ -5,7 +5,7 @@ import type { MediaProvider, MediaProviderType } from "./types";
 // Penyedia pencarian media. Untuk menambah penyedia baru: tambahkan tipe di lib/types.ts,
 // lalu satu entri di PROVIDERS di bawah (cukup isi fungsi yang didukung).
 
-export type Hit = { url: string; title: string };
+export type Hit = { url: string; title: string; desc?: string; date?: string };
 export type Photo = { url: string; credit: string; alt: string; hotlinkOnly?: boolean };
 
 export interface ProviderImpl {
@@ -19,6 +19,8 @@ export interface ProviderImpl {
 }
 
 const T = 9000;
+type BraveR = { url: string; title: string; description?: string; page_age?: string; age?: string };
+type SerperR = { link: string; title: string; snippet?: string; date?: string };
 async function j(url: string, init: RequestInit = {}) {
   const res = await fetch(url, { ...init, signal: AbortSignal.timeout(T) });
   const text = await res.text();
@@ -33,15 +35,15 @@ export const PROVIDERS: Record<MediaProviderType, ProviderImpl> = {
     signup: "https://brave.com/search/api/",
     web: async (k, q) => {
       const d = await j(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=10&country=id&search_lang=id`, { headers: { accept: "application/json", "x-subscription-token": k } });
-      return (d.web?.results || []).map((r: { url: string; title: string }) => ({ url: r.url, title: r.title }));
+      return (d.web?.results || []).map((r: BraveR) => ({ url: r.url, title: r.title, desc: r.description, date: r.page_age || r.age }));
     },
     news: async (k, q) => {
       const d = await j(`https://api.search.brave.com/res/v1/news/search?q=${encodeURIComponent(q)}&count=10&country=id&search_lang=id`, { headers: { accept: "application/json", "x-subscription-token": k } });
-      return (d.results || []).map((r: { url: string; title: string }) => ({ url: r.url, title: r.title }));
+      return (d.results || []).map((r: BraveR) => ({ url: r.url, title: r.title, desc: r.description, date: r.page_age || r.age }));
     },
     videos: async (k, q) => {
       const d = await j(`https://api.search.brave.com/res/v1/videos/search?q=${encodeURIComponent(q)}&count=10&country=id&search_lang=id`, { headers: { accept: "application/json", "x-subscription-token": k } });
-      return (d.results || []).map((r: { url: string; title: string }) => ({ url: r.url, title: r.title }));
+      return (d.results || []).map((r: BraveR) => ({ url: r.url, title: r.title, desc: r.description, date: r.page_age || r.age }));
     },
   },
   serper: {
@@ -50,15 +52,15 @@ export const PROVIDERS: Record<MediaProviderType, ProviderImpl> = {
     signup: "https://serper.dev",
     web: async (k, q) => {
       const d = await j("https://google.serper.dev/search", { method: "POST", headers: { "x-api-key": k, "content-type": "application/json" }, body: JSON.stringify({ q, gl: "id", hl: "id", num: 10 }) });
-      return (d.organic || []).map((r: { link: string; title: string }) => ({ url: r.link, title: r.title }));
+      return (d.organic || []).map((r: SerperR) => ({ url: r.link, title: r.title, desc: r.snippet, date: r.date }));
     },
     news: async (k, q) => {
       const d = await j("https://google.serper.dev/news", { method: "POST", headers: { "x-api-key": k, "content-type": "application/json" }, body: JSON.stringify({ q, gl: "id", hl: "id", num: 10 }) });
-      return (d.news || []).map((r: { link: string; title: string }) => ({ url: r.link, title: r.title }));
+      return (d.news || []).map((r: SerperR) => ({ url: r.link, title: r.title, desc: r.snippet, date: r.date }));
     },
     videos: async (k, q) => {
       const d = await j("https://google.serper.dev/videos", { method: "POST", headers: { "x-api-key": k, "content-type": "application/json" }, body: JSON.stringify({ q, gl: "id", hl: "id", num: 10 }) });
-      return (d.videos || []).map((r: { link: string; title: string }) => ({ url: r.link, title: r.title }));
+      return (d.videos || []).map((r: SerperR) => ({ url: r.link, title: r.title, desc: r.snippet, date: r.date }));
     },
   },
   youtube: {
@@ -68,7 +70,7 @@ export const PROVIDERS: Record<MediaProviderType, ProviderImpl> = {
     videos: async (k, q) => {
       const after = new Date(Date.now() - 60 * 864e5).toISOString();
       const d = await j(`https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=6&regionCode=ID&relevanceLanguage=id&publishedAfter=${after}&q=${encodeURIComponent(q)}&key=${k}`);
-      return (d.items || []).map((r: { id: { videoId: string }; snippet: { title: string } }) => ({ url: `https://www.youtube.com/watch?v=${r.id.videoId}`, title: r.snippet.title }));
+      return (d.items || []).map((r: { id: { videoId: string }; snippet: { title: string; description?: string; publishedAt?: string } }) => ({ url: `https://www.youtube.com/watch?v=${r.id.videoId}`, title: r.snippet.title, desc: r.snippet.description, date: r.snippet.publishedAt }));
     },
   },
   pexels: {

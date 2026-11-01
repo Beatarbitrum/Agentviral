@@ -1,8 +1,10 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import { api, slugifyClient } from "./client";
 import Uploader from "./Uploader";
+import { Spinner } from "./ui";
+import { EditorSkeleton } from "./Skeletons";
 import type { Article, Category, MediaRef, VideoRef } from "@/lib/types";
 
 type Form = Omit<Article, "id" | "createdAt" | "updatedAt" | "tags"> & { tagsText: string; embedsText: string; sourcesText: string };
@@ -60,11 +62,26 @@ function seoChecks(f: Form) {
   return { checks, score: Math.round((checks.filter((c) => c[1]).length / checks.length) * 100), words };
 }
 
-export default function Editor({ id }: { id?: string }) {
-  const [f, setF] = useState<Form>(empty());
-  const [cats, setCats] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(Boolean(id));
-  const [saving, setSaving] = useState(false);
+function toForm(a: Article): Form {
+  return {
+    ...empty(),
+    ...a,
+    cover: a.cover || { url: "", alt: "", caption: "", credit: "" },
+    seo: { metaTitle: "", metaDescription: "", focusKeyword: "", ...a.seo },
+    tagsText: a.tags.join(", "),
+    embedsText: a.embeds.join("\n"),
+    sourcesText: a.sources.map((s) => `${s.title} | ${s.url}`).join("\n"),
+  };
+}
+
+export default function Editor({ id, initial, categories }: { id?: string; initial?: Article; categories?: Category[] }) {
+  // Data awal dikirim dari server (tanpa fetch tambahan di HP) — editor langsung bisa dipakai.
+  const [f, setF] = useState<Form>(() => (initial ? toForm(initial) : empty()));
+  const [cats, setCats] = useState<Category[]>(categories || []);
+  const [loading, setLoading] = useState(Boolean(id) && !initial);
+  const [saving, setSaving] = useState<"" | "draft" | "publish">("");
+  const savingRef = useRef(false);
+  const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null);
   const [preview, setPreview] = useState(false);
   const [aiBusy, setAiBusy] = useState("");
@@ -74,25 +91,40 @@ export default function Editor({ id }: { id?: string }) {
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    api("/api/admin/articles").then((r) => setCats(r.categories));
-    if (id)
+    if (!categories) api("/api/admin/articles").then((r) => setCats(r.categories)).catch(() => {});
+    if (id && !initial)
       api(`/api/admin/articles/${id}`)
-        .then(({ article: a }: { article: Article }) =>
-          setF({
-            ...empty(),
-            ...a,
-            cover: a.cover || { url: "", alt: "", caption: "", credit: "" },
-            seo: { metaTitle: "", metaDescription: "", focusKeyword: "", ...a.seo },
-            tagsText: a.tags.join(", "),
-            embedsText: a.embeds.join("\n"),
-            sourcesText: a.sources.map((s) => `${s.title} | ${s.url}`).join("\n"),
-          }),
-        )
+        .then(({ article: a }: { article: Article }) => setF(toForm(a)))
         .catch((e) => setMsg({ t: e.message, ok: false }))
         .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, initial, categories]);
 
-  const set = <K extends keyof Form>(k: K, v: Form[K]) => setF((p) => ({ ...p, [k]: v }));
+  // Peringatkan bila keluar halaman sebelum menyimpan
+  useEffect(() => {
+    if (!dirty) return;
+    const h = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", h);
+    return () => window.removeEventListener("beforeunload", h);
+  }, [dirty]);
+
+  // Hilangkan pesan sukses otomatis
+  useEffect(() => {
+    if (!msg?.ok || aiBusy) return;
+    const t = setTimeout(() => setMsg(null), 4000);
+    return () => clearTimeout(t);
+  }, [msg, aiBusy]);
+
+  const upd = (fn: (p: Form) => Form) => { setDirty(true); setF(fn); };
+  const set = <K extends keyof Form>(k: K, v: Form[K]) => upd((p) => ({ ...p, [k]: v }));
+
+  // Ctrl/Cmd+S = simpan draf
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); save("draft"); }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  });
   const seo = useMemo(() => seoChecks(f), [f]);
 
   function insert(before: string, after = "", ph = "teks") {
@@ -105,8 +137,10 @@ export default function Editor({ id }: { id?: string }) {
     setTimeout(() => { el.focus(); el.selectionStart = s + before.length; el.selectionEnd = s + before.length + sel.length; }, 0);
   }
 
-  async function save(statusOverride?: Form["status"]) {
-    setSaving(true);
+  const save = useCallback(async function save(statusOverride?: Form["status"]) {
+    if (savingRef.current) return; // cegah ketuk ganda
+    savingRef.current = true;
+    setSaving(statusOverride === "draft" ? "draft" : "publish");
     setMsg(null);
     try {
       const status = statusOverride || f.status;
@@ -124,6 +158,7 @@ export default function Editor({ id }: { id?: string }) {
       };
       const r = savedId ? await api(`/api/admin/articles/${savedId}`, "PUT", payload) : await api("/api/admin/articles", "POST", payload);
       setF((p) => ({ ...p, status, slug: r.article.slug }));
+      setDirty(false);
       setMsg({ t: status === "draft" ? "Draf tersimpan ✓" : new Date(r.article.publishAt) > new Date() ? "Terjadwal ✓" : "Tersimpan & terbit ✓", ok: true });
       if (!savedId) {
         setSavedId(r.article.id);
@@ -132,9 +167,10 @@ export default function Editor({ id }: { id?: string }) {
     } catch (e) {
       setMsg({ t: (e as Error).message, ok: false });
     } finally {
-      setSaving(false);
+      savingRef.current = false;
+      setSaving("");
     }
-  }
+  }, [f, savedId]);
 
   async function ai(action: string) {
     setAiBusy(action);
@@ -157,7 +193,7 @@ export default function Editor({ id }: { id?: string }) {
     setMsg({ t: "🔎 Mencari foto, video & sumber…", ok: true });
     try {
       const sourceUrls = f.sourcesText.split("\n").map((l) => (l.includes("|") ? l.split("|").pop()! : l).trim()).filter((u) => /^https?:/.test(u));
-      const r = await api("/api/admin/ai", "POST", { action: "find_media", title: f.title, keyword: f.seo.focusKeyword, sourceUrls });
+      const r = await api("/api/admin/ai", "POST", { action: "find_media", title: f.title, keyword: f.seo.focusKeyword, tags: f.tagsText.split(",").map((t) => t.trim()).filter(Boolean), sourceUrls });
       setF((p) => {
         const em = new Set(p.embedsText.split("\n").map((t) => t.trim()).filter(Boolean));
         (r.embeds as string[]).forEach((e) => em.add(e));
@@ -173,24 +209,40 @@ export default function Editor({ id }: { id?: string }) {
     }
   }
 
-  if (loading) return <p>Memuat…</p>;
+  if (loading) return <EditorSkeleton />;
   const AiBtn = ({ a, t }: { a: string; t: string }) => (
-    <button type="button" className="btn btn-ghost px-2 py-1 text-xs" disabled={!!aiBusy} onClick={() => ai(a)}>{aiBusy === a ? "…" : `✨ ${t}`}</button>
+    <button type="button" className="btn btn-ghost btn-sm" disabled={!!aiBusy} onClick={() => ai(a)}>{aiBusy === a ? <><Spinner /> Memproses…</> : `✨ ${t}`}</button>
+  );
+
+  const publishLabel = new Date(f.publishAt).getTime() > Date.now() + 60000 ? "Jadwalkan" : "Terbitkan";
+  const actions = (
+    <>
+      <button type="button" className="btn btn-ghost" disabled={!!aiBusy || !f.title} onClick={findMedia} aria-label="Cari media otomatis" title="Cari media otomatis">
+        {aiBusy === "media" ? <Spinner /> : "🔎"}<span className="hidden sm:inline">{aiBusy === "media" ? "Mencari…" : "Cari media"}</span>
+      </button>
+      <button type="button" className="btn btn-ghost" disabled={!!saving} onClick={() => save("draft")}>
+        {saving === "draft" ? <><Spinner /> Menyimpan…</> : "Simpan Draf"}
+      </button>
+      <button type="button" className="btn btn-primary" disabled={!!saving} onClick={() => save(publishLabel === "Jadwalkan" ? "scheduled" : "published")}>
+        {saving === "publish" ? <><Spinner /> Menyimpan…</> : publishLabel}
+      </button>
+    </>
   );
 
   return (
-    <div className="space-y-4">
-      <div className="sticky top-0 z-20 -mx-4 flex flex-wrap items-center justify-between gap-2 border-b bg-neutral-100/95 px-4 py-2 backdrop-blur lg:-mx-6 lg:px-6">
-        <h1 className="text-xl font-black">{savedId ? "Edit Artikel" : "Tulis Artikel"}</h1>
+    <div className="space-y-4 pb-28 lg:pb-0">
+      <div className="sticky top-0 z-20 -mx-3 flex flex-wrap items-center justify-between gap-2 border-b bg-neutral-100/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4 lg:-mx-6 lg:px-6">
+        <h1 className="text-lg font-black sm:text-xl">{savedId ? "Edit Artikel" : "Tulis Artikel"}{dirty && <span className="ml-2 align-middle text-xs font-semibold text-amber-600">● belum disimpan</span>}</h1>
         <div className="flex flex-wrap items-center gap-2">
-          {msg && <span className={`text-sm ${msg.ok ? "text-green-700" : "text-red-700"}`}>{msg.t}</span>}
-          {savedId && f.status !== "draft" && <a className="btn btn-ghost" target="_blank" href={`/berita/${f.slug}`}>Lihat ↗</a>}
-          <button className="btn btn-ghost" disabled={!!aiBusy || !f.title} onClick={findMedia}>{aiBusy === "media" ? "Mencari…" : "🔎 Cari media otomatis"}</button>
-          <button className="btn btn-ghost" disabled={saving} onClick={() => save("draft")}>Simpan Draf</button>
-          <button className="btn btn-primary" disabled={saving} onClick={() => save(new Date(f.publishAt).getTime() > Date.now() + 60000 ? "scheduled" : "published")}>
-            {saving ? "Menyimpan…" : new Date(f.publishAt).getTime() > Date.now() + 60000 ? "Jadwalkan" : "Terbitkan"}
-          </button>
+          {msg && <span role="status" className={`hidden text-sm lg:inline ${msg.ok ? "text-green-700" : "text-red-700"}`}>{msg.t}</span>}
+          {savedId && f.status !== "draft" && <a className="btn btn-ghost btn-sm sm:min-h-10" target="_blank" href={`/berita/${f.slug}`}>Lihat ↗</a>}
+          <div className="hidden items-center gap-2 lg:flex">{actions}</div>
         </div>
+      </div>
+      {/* HP: bilah simpan menempel di bawah layar, mudah dijangkau jempol */}
+      <div className="pb-safe fixed inset-x-0 bottom-0 z-30 border-t bg-white/95 px-3 pt-2 shadow-[0_-4px_16px_rgba(0,0,0,.08)] backdrop-blur lg:hidden">
+        {msg && <p role="status" className={`mb-1 line-clamp-2 text-xs ${msg.ok ? "text-green-700" : "text-red-700"}`}>{msg.t}</p>}
+        <div className="grid grid-cols-[auto_1fr_1fr] gap-2">{actions}</div>
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
@@ -201,7 +253,7 @@ export default function Editor({ id }: { id?: string }) {
               <input className="admin-input text-lg font-bold" value={f.title} onChange={(e) => { set("title", e.target.value); if (!slugTouched) set("slug", slugifyClient(e.target.value)); }} placeholder="Judul berita" />
               {titleOpts.length > 0 && (
                 <div className="mt-2 space-y-1 rounded bg-purple-50 p-2 text-sm">
-                  {titleOpts.map((t) => <button key={t} type="button" className="block text-left hover:text-red-700" onClick={() => { set("title", t); setTitleOpts([]); }}>→ {t}</button>)}
+                  {titleOpts.map((t) => <button key={t} type="button" className="block min-h-11 w-full rounded px-2 py-2 text-left hover:text-red-700 active:bg-purple-100 sm:min-h-0" onClick={() => { set("title", t); setTitleOpts([]); }}>→ {t}</button>)}
                 </div>
               )}
             </div>
@@ -214,12 +266,12 @@ export default function Editor({ id }: { id?: string }) {
 
           <div className="card space-y-2">
             <div className="flex flex-wrap items-center gap-1">
-              <label className="admin-label mr-2 mb-0">Isi (Markdown)</label>
+              <label className="admin-label mb-0 mr-2 w-full sm:w-auto">Isi (Markdown)</label>
               {[["B", "**", "**"], ["I", "_", "_"], ["H2", "\n## ", "\n"], ["H3", "\n### ", "\n"], ["❝", "\n> ", "\n"], ["• List", "\n- ", ""], ["🔗", "[", "](https://)"]].map(([t, b, a]) => (
-                <button key={t} type="button" className="rounded border px-2 py-0.5 text-xs font-bold hover:bg-neutral-100" onClick={() => insert(b, a)}>{t}</button>
+                <button key={t} type="button" className="tap border px-2 text-xs font-bold hover:bg-neutral-100" onClick={() => insert(b, a)}>{t}</button>
               ))}
               <Uploader label="Gambar di isi" onUploaded={(u) => u.forEach((x) => insert(`\n![${x.name}](${x.url} "Keterangan foto")\n`, "", ""))} />
-              <button type="button" className="ml-auto rounded border px-2 py-0.5 text-xs" onClick={() => setPreview(!preview)}>{preview ? "✏️ Edit" : "👁 Pratinjau"}</button>
+              <button type="button" className="tap ml-auto border px-3 text-xs" onClick={() => setPreview(!preview)}>{preview ? "✏️ Edit" : "👁 Pratinjau"}</button>
             </div>
             {preview ? (
               <div className="prose-av min-h-[400px] rounded border p-4" dangerouslySetInnerHTML={{ __html: marked.parse(f.body.replace(/</g, "&lt;"), { async: false }) as string }} />
@@ -232,41 +284,41 @@ export default function Editor({ id }: { id?: string }) {
           <div className="card space-y-3">
             <h2 className="font-bold">🖼️ Cover</h2>
             <div className="flex flex-wrap items-center gap-2">
-              <Uploader label="Unggah cover" onUploaded={(u) => setF((p) => ({ ...p, cover: { ...(p.cover as MediaRef), url: u[0].url, alt: p.cover?.alt || p.title } }))} />
-              <input className="admin-input flex-1" placeholder="…atau tempel URL gambar" value={f.cover?.url || ""} onChange={(e) => setF((p) => ({ ...p, cover: { ...(p.cover as MediaRef), url: e.target.value } }))} />
+              <Uploader label="Unggah cover" onUploaded={(u) => upd((p) => ({ ...p, cover: { ...(p.cover as MediaRef), url: u[0].url, alt: p.cover?.alt || p.title } }))} />
+              <input className="admin-input flex-1" placeholder="…atau tempel URL gambar" value={f.cover?.url || ""} onChange={(e) => upd((p) => ({ ...p, cover: { ...(p.cover as MediaRef), url: e.target.value } }))} />
             </div>
             {f.cover?.url && (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={f.cover.url} alt="" className="max-h-56 rounded" />
             )}
             <div className="grid gap-2 sm:grid-cols-3">
-              <input className="admin-input" placeholder="Alt text (wajib untuk SEO)" value={f.cover?.alt || ""} onChange={(e) => setF((p) => ({ ...p, cover: { ...(p.cover as MediaRef), alt: e.target.value } }))} />
-              <input className="admin-input" placeholder="Keterangan foto" value={f.cover?.caption || ""} onChange={(e) => setF((p) => ({ ...p, cover: { ...(p.cover as MediaRef), caption: e.target.value } }))} />
-              <input className="admin-input" placeholder="Kredit foto" value={f.cover?.credit || ""} onChange={(e) => setF((p) => ({ ...p, cover: { ...(p.cover as MediaRef), credit: e.target.value } }))} />
+              <input className="admin-input" placeholder="Alt text (wajib untuk SEO)" value={f.cover?.alt || ""} onChange={(e) => upd((p) => ({ ...p, cover: { ...(p.cover as MediaRef), alt: e.target.value } }))} />
+              <input className="admin-input" placeholder="Keterangan foto" value={f.cover?.caption || ""} onChange={(e) => upd((p) => ({ ...p, cover: { ...(p.cover as MediaRef), caption: e.target.value } }))} />
+              <input className="admin-input" placeholder="Kredit foto" value={f.cover?.credit || ""} onChange={(e) => upd((p) => ({ ...p, cover: { ...(p.cover as MediaRef), credit: e.target.value } }))} />
             </div>
           </div>
 
           <div className="card space-y-3">
             <div className="flex items-center justify-between"><h2 className="font-bold">📷 Galeri</h2><Uploader multiple label="Tambah foto" onUploaded={(u) => set("gallery", [...f.gallery, ...u.map((x) => ({ url: x.url, alt: "", caption: "" }))])} /></div>
             {f.gallery.map((g, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex flex-wrap items-center gap-2 border-b pb-2 sm:flex-nowrap sm:border-0 sm:pb-0">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={g.url} alt="" className="h-14 w-20 rounded object-cover" />
                 <input className="admin-input" placeholder="Alt text" value={g.alt || ""} onChange={(e) => set("gallery", f.gallery.map((x, j) => (j === i ? { ...x, alt: e.target.value } : x)))} />
                 <input className="admin-input" placeholder="Keterangan" value={g.caption || ""} onChange={(e) => set("gallery", f.gallery.map((x, j) => (j === i ? { ...x, caption: e.target.value } : x)))} />
-                <button className="text-red-700" onClick={() => set("gallery", f.gallery.filter((_, j) => j !== i))}>✕</button>
+                <button type="button" aria-label="Hapus foto" className="tap shrink-0 text-red-700" onClick={() => set("gallery", f.gallery.filter((_, j) => j !== i))}>✕</button>
               </div>
             ))}
           </div>
 
           <div className="card space-y-3 border-2 border-red-200">
-            <h2 className="font-bold text-red-700">🎥 Bukti Viral</h2>
+            <h2 className="font-bold text-red-700">📹 Fakta Lapangan</h2>
             <div className="flex items-center justify-between"><span className="text-sm font-semibold">Video unggahan</span><Uploader accept="video/*" multiple label="Unggah video" onUploaded={(u) => set("videos", [...f.videos, ...u.map((x) => ({ url: x.url, title: x.name }))])} /></div>
             {f.videos.map((v: VideoRef, i) => (
-              <div key={i} className="flex items-center gap-2">
+              <div key={i} className="flex flex-wrap items-center gap-2 border-b pb-2 sm:flex-nowrap sm:border-0 sm:pb-0">
                 <video src={v.url} className="h-14 w-24 rounded bg-black" preload="metadata" />
                 <input className="admin-input" placeholder="Judul/keterangan video" value={v.title || ""} onChange={(e) => set("videos", f.videos.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))} />
-                <button className="text-red-700" onClick={() => set("videos", f.videos.filter((_, j) => j !== i))}>✕</button>
+                <button type="button" aria-label="Hapus video" className="tap shrink-0 text-red-700" onClick={() => set("videos", f.videos.filter((_, j) => j !== i))}>✕</button>
               </div>
             ))}
             <div>
@@ -296,7 +348,7 @@ export default function Editor({ id }: { id?: string }) {
             </div>
             <div className="space-y-1 text-sm">
               {([["headline", "Headline (hero beranda)"], ["breaking", "Breaking news (ticker)"], ["featured", "Featured / pilihan redaksi"]] as const).map(([k, t]) => (
-                <label key={k} className="flex items-center gap-2"><input type="checkbox" checked={f[k]} onChange={(e) => set(k, e.target.checked)} /> {t}</label>
+                <label key={k} className="admin-check"><input type="checkbox" checked={f[k]} onChange={(e) => set(k, e.target.checked)} /> {t}</label>
               ))}
             </div>
             <div>

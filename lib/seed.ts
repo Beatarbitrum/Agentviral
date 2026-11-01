@@ -68,7 +68,7 @@ Mengunggah saat audiens sedang aktif, misalnya jam istirahat atau malam hari, me
 ## 5. Mudah dibagikan
 Judul yang jelas dan visual yang kuat membuat orang tak ragu meneruskannya ke grup percakapan.
 
-Bagian **Bukti Viral** di bawah ini menampilkan contoh sematan video (film animasi terbuka *Big Buck Bunny*) untuk mendemonstrasikan fitur embed.`,
+Bagian **Fakta Lapangan** di bawah ini menampilkan contoh sematan video (film animasi terbuka *Big Buck Bunny*) untuk mendemonstrasikan fitur embed.`,
   },
   {
     title: "[DEMO] Tips Mengamankan Akun Media Sosial dengan Verifikasi Dua Langkah",

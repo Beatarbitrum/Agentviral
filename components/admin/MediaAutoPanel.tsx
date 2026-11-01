@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api } from "./client";
+import { Btn, Spinner } from "./ui";
 
 // Daftar penyedia yang bisa ditambahkan. Tambah penyedia baru: tambahkan di sini dan di lib/mediaProviders.ts.
 const TYPES: { type: string; label: string; does: string; signup: string }[] = [
@@ -33,11 +34,12 @@ export default function MediaAutoPanel() {
   const [addType, setAddType] = useState("brave");
   const [pv, setPv] = useState({ title: "", busy: false, out: "" });
   useEffect(() => { api("/api/admin/settings").then((r) => setM(r.settings.media)); }, []);
-  if (!m) return <p>Memuat…</p>;
+  if (!m) return <p className="flex items-center gap-2 text-neutral-500"><Spinner /> Memuat…</p>;
   const set = <K extends keyof M>(k: K, v: M[K]) => setM({ ...m, [k]: v });
   const setP = (i: number, patch: Partial<Prov>) => set("providers", m.providers.map((p, j) => (j === i ? { ...p, ...patch } : p)));
 
   async function save() {
+    if (msg === "Menyimpan…") return;
     setMsg("Menyimpan…");
     try {
       const r = await api("/api/admin/settings", "PUT", { media: m });
@@ -67,7 +69,7 @@ export default function MediaAutoPanel() {
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="card space-y-3">
           <h2 className="font-bold">Aturan</h2>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={m.autoAfterAi} onChange={(e) => set("autoAfterAi", e.target.checked)} /> Cari media otomatis setiap AI selesai menulis</label>
+          <label className="admin-check text-sm"><input type="checkbox" checked={m.autoAfterAi} onChange={(e) => set("autoAfterAi", e.target.checked)} /> Cari media otomatis setiap AI selesai menulis</label>
           <div>
             <label className="admin-label">Sumber foto sampul</label>
             <select className="admin-input" value={m.coverMode} onChange={(e) => set("coverMode", e.target.value as M["coverMode"])}>
@@ -80,18 +82,18 @@ export default function MediaAutoPanel() {
             <label className="admin-label">Platform yang dicari</label>
             <div className="flex flex-wrap gap-3 text-sm">
               {PLATFORMS.map(([k, t]) => (
-                <label key={k} className="flex items-center gap-1"><input type="checkbox" checked={!!m.platforms[k]} onChange={(e) => set("platforms", { ...m.platforms, [k]: e.target.checked })} /> {t}</label>
+                <label key={k} className="admin-check"><input type="checkbox" checked={!!m.platforms[k]} onChange={(e) => set("platforms", { ...m.platforms, [k]: e.target.checked })} /> {t}</label>
               ))}
             </div>
           </div>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div><label className="admin-label">Maks video YT</label><input type="number" min={0} max={10} className="admin-input" value={m.maxVideos} onChange={(e) => set("maxVideos", Number(e.target.value))} /></div>
             <div><label className="admin-label">Maks postingan sosial</label><input type="number" min={0} max={10} className="admin-input" value={m.maxSocial} onChange={(e) => set("maxSocial", Number(e.target.value))} /></div>
             <div><label className="admin-label">Maks referensi</label><input type="number" min={0} max={10} className="admin-input" value={m.maxRefs} onChange={(e) => set("maxRefs", Number(e.target.value))} /></div>
           </div>
           <div><label className="admin-label">Kata kunci tambahan (opsional)</label><input className="admin-input" placeholder="mis. Indonesia, terbaru" value={m.extraKeywords} onChange={(e) => set("extraKeywords", e.target.value)} /></div>
           <div><label className="admin-label">Domain diblokir (pisahkan koma)</label><textarea className="admin-input font-mono text-xs" rows={2} placeholder="contoh.com, situs-hoaks.net" value={m.blockedDomains} onChange={(e) => set("blockedDomains", e.target.value)} /></div>
-          <div className="flex items-center gap-2"><button className="btn btn-primary" onClick={save}>Simpan</button><span className="text-sm">{msg}</span></div>
+          <div className="flex items-center gap-2"><Btn className="btn btn-primary" busy={msg === "Menyimpan…"} busyText="Menyimpan…" onClick={save}>Simpan</Btn><span className="text-sm">{msg}</span></div>
         </section>
 
         <section className="card space-y-3">
@@ -104,20 +106,20 @@ export default function MediaAutoPanel() {
               <div key={p.id || i} className="space-y-2 rounded border p-3">
                 <div className="flex items-center justify-between gap-2">
                   <input className="admin-input font-semibold" value={p.name} onChange={(e) => setP(i, { name: e.target.value })} />
-                  <label className="flex shrink-0 items-center gap-1 text-sm"><input type="checkbox" checked={p.enabled} onChange={(e) => setP(i, { enabled: e.target.checked })} /> Aktif</label>
+                  <label className="admin-check shrink-0 text-sm"><input type="checkbox" checked={p.enabled} onChange={(e) => setP(i, { enabled: e.target.checked })} /> Aktif</label>
                 </div>
                 <p className="text-xs text-neutral-500">{t?.label}: {t?.does} · <a className="underline" href={t?.signup} target="_blank" rel="noreferrer">daftar API key</a></p>
-                {p.hasToken && !p.deleteToken && <p className="font-mono text-xs">Tersimpan: {p.tokenMasked} <button className="ml-2 text-red-700" onClick={() => setP(i, { deleteToken: true })}>Hapus token</button></p>}
+                {p.hasToken && !p.deleteToken && <p className="font-mono text-xs">Tersimpan: {p.tokenMasked} <button type="button" className="tap ml-2 px-2 text-red-700" onClick={() => setP(i, { deleteToken: true })}>Hapus token</button></p>}
                 <input type="password" autoComplete="off" className="admin-input font-mono text-sm" placeholder={p.hasToken ? "Tempel token baru untuk mengganti" : "Tempel API key"} value={p.token || ""} onChange={(e) => setP(i, { token: e.target.value, deleteToken: false })} />
                 <div className="flex flex-wrap items-center gap-2 text-sm">
-                  <button className="btn btn-ghost px-2 py-1 text-xs" onClick={() => test(p)} disabled={!p.id || !p.hasToken}>Tes</button>
-                  <button className="text-xs text-red-700" onClick={() => confirm(`Hapus penyedia ${p.name}?`) && set("providers", m.providers.filter((_, j) => j !== i))}>Hapus penyedia</button>
+                  <Btn className="btn btn-ghost btn-sm" busy={!!p.id && tests[p.id] === "Menguji…"} onClick={() => test(p)} disabled={!p.id || !p.hasToken}>Tes</Btn>
+                  <button type="button" className="tap px-2 text-xs text-red-700" onClick={() => confirm(`Hapus penyedia ${p.name}?`) && set("providers", m.providers.filter((_, j) => j !== i))}>Hapus penyedia</button>
                   {p.id && tests[p.id] && <span className="text-xs">{tests[p.id]}</span>}
                 </div>
               </div>
             );
           })}
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <select className="admin-input" value={addType} onChange={(e) => setAddType(e.target.value)}>
               {TYPES.map((t) => <option key={t.type} value={t.type}>{t.label} — {t.does}</option>)}
             </select>
@@ -129,9 +131,9 @@ export default function MediaAutoPanel() {
 
       <section className="card space-y-2">
         <h2 className="font-bold">Coba cari</h2>
-        <div className="flex gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row">
           <input className="admin-input" placeholder="Judul atau topik, mis. harga BBM November" value={pv.title} onChange={(e) => setPv({ ...pv, title: e.target.value })} />
-          <button className="btn btn-dark shrink-0" disabled={pv.busy} onClick={preview}>{pv.busy ? "Mencari…" : "Cari"}</button>
+          <Btn className="btn btn-dark shrink-0" busy={pv.busy} busyText="Mencari…" onClick={preview}>Cari</Btn>
         </div>
         {pv.out && <pre className="whitespace-pre-wrap break-all rounded bg-neutral-50 p-2 text-xs">{pv.out}</pre>}
         <p className="text-xs text-neutral-500">Pratinjau memakai pengaturan yang sudah disimpan.</p>

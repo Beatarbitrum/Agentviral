@@ -46,7 +46,7 @@ export default async function Dashboard() {
           <ol className="mt-2 divide-y text-sm">
             {top.map((a) => (
               <li key={a.id} className="flex justify-between gap-2 py-2">
-                <Link href={`/admin/artikel/${a.id}`} className="line-clamp-1 hover:text-red-700">{a.title}</Link>
+                <Link href={`/admin/artikel/${a.id}`} className="line-clamp-1 py-1 hover:text-red-700 active:text-red-700">{a.title}</Link>
                 <span className="shrink-0 font-mono text-xs text-neutral-500">{(views[a.id] || 0).toLocaleString("id-ID")}</span>
               </li>
             ))}
@@ -58,7 +58,7 @@ export default async function Dashboard() {
           <ul className="mt-2 divide-y text-sm">
             {recent.map((a) => (
               <li key={a.id} className="flex justify-between gap-2 py-2">
-                <Link href={`/admin/artikel/${a.id}`} className="line-clamp-1 hover:text-red-700">{a.title}</Link>
+                <Link href={`/admin/artikel/${a.id}`} className="line-clamp-1 py-1 hover:text-red-700 active:text-red-700">{a.title}</Link>
                 <span className="shrink-0 text-xs text-neutral-500">{a.status} · {formatTanggal(a.updatedAt, false).split(", ")[1]}</span>
               </li>
             ))}

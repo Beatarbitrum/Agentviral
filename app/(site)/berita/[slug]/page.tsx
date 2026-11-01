@@ -105,12 +105,12 @@ export default async function ArticlePage({ params }: P) {
         )}
 
         {(a.videos.length > 0 || embeds.length > 0) && (
-          <section className="mt-8 rounded-lg border-2 border-brand p-4" id="bukti-viral">
-            <h2 className="flex items-center gap-2 text-lg font-black uppercase text-brand">🎥 Bukti Viral</h2>
+          <section className="mt-8 rounded-lg border-2 border-brand p-4" id="fakta-lapangan">
+            <h2 className="flex items-center gap-2 text-lg font-black uppercase text-brand">📹 Fakta Lapangan</h2>
             <div className="mt-3 space-y-5">
               {a.videos.map((v, i) => (
                 <figure key={`v${i}`}>
-                  <video controls preload="metadata" playsInline className="w-full rounded-md bg-black" src={v.url} />
+                  <video controls preload="metadata" playsInline className="aspect-video w-full rounded-md bg-black" src={v.url} />
                   {v.title && <figcaption className="mt-1 text-xs text-neutral-500">{v.title}</figcaption>}
                 </figure>
               ))}

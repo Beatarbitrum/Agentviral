@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./client";
 import Uploader from "./Uploader";
+import { Btn, Spinner } from "./ui";
 
 type S = {
   siteName: string; tagline: string; description: string; logoUrl?: string; faviconUrl?: string; tickerText?: string; gaId?: string; adsenseClient?: string; contactEmail?: string; fontStyle?: string;
@@ -15,26 +16,31 @@ export default function SettingsForm() {
   const [msg, setMsg] = useState("");
   const [pw, setPw] = useState({ current: "", next: "", confirm: "" });
   const [pwMsg, setPwMsg] = useState("");
+  const [saving, setSaving] = useState("");
   useEffect(() => { api("/api/admin/settings").then((r) => setS(r.settings)); }, []);
-  if (!s) return <p>Memuat…</p>;
+  if (!s) return <p className="flex items-center gap-2 text-neutral-500"><Spinner /> Memuat…</p>;
   const set = (k: keyof S, v: unknown) => setS({ ...s, [k]: v } as S);
   async function save() {
+    if (saving) return;
+    setSaving("site"); setMsg("");
     try {
       const r = await api("/api/admin/settings", "PUT", { site: s, fontStyle: s!.fontStyle || "modern", ai: { autoGenerate: s!.ai.autoGenerate, autoCount: s!.ai.autoCount, autoPublish: s!.ai.autoPublish } });
       setS(r.settings); setMsg("Tersimpan ✓");
-    } catch (e) { setMsg((e as Error).message); }
+    } catch (e) { setMsg((e as Error).message); } finally { setSaving(""); }
   }
   async function changePw() {
     if (pw.next !== pw.confirm) return setPwMsg("Konfirmasi password tidak sama");
+    if (saving) return;
+    setSaving("pw"); setPwMsg("");
     try { await api("/api/admin/password", "POST", pw); setPwMsg("Password diganti ✓ (sesi lain otomatis keluar)"); setPw({ current: "", next: "", confirm: "" }); }
-    catch (e) { setPwMsg((e as Error).message); }
+    catch (e) { setPwMsg((e as Error).message); } finally { setSaving(""); }
   }
   const F = ({ k, label, ph }: { k: keyof S; label: string; ph?: string }) => (
     <div><label className="admin-label">{label}</label><input className="admin-input" placeholder={ph} value={(s[k] as string) || ""} onChange={(e) => set(k, e.target.value)} /></div>
   );
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between"><h1 className="text-2xl font-black">Pengaturan</h1><div className="flex items-center gap-2"><span className="text-sm text-green-700">{msg}</span><button className="btn btn-primary" onClick={save}>Simpan</button></div></div>
+      <div className="sticky top-0 z-20 -mx-3 flex flex-wrap items-center justify-between gap-2 border-b bg-neutral-100/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4 lg:static lg:mx-0 lg:border-0 lg:bg-transparent lg:p-0"><h1 className="text-2xl font-black">Pengaturan</h1><div className="flex items-center gap-2"><span className={`text-sm ${msg.includes("✓") ? "text-green-700" : "text-red-700"}`}>{msg}</span><Btn className="btn btn-primary" busy={saving === "site"} busyText="Menyimpan…" onClick={save}>Simpan</Btn></div></div>
       <div className="grid gap-4 lg:grid-cols-2">
         <section className="card space-y-3">
           <h2 className="font-bold">Identitas Situs</h2>
@@ -68,9 +74,9 @@ export default function SettingsForm() {
         </section>
         <section className="card space-y-3">
           <h2 className="font-bold">Otomasi</h2>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.ai.autoGenerate} onChange={(e) => set("ai", { ...s.ai, autoGenerate: e.target.checked })} /> Buat draf otomatis dari Google Trends setiap hari (Vercel Cron, ±06:00 WIB)</label>
+          <label className="admin-check text-sm"><input type="checkbox" checked={s.ai.autoGenerate} onChange={(e) => set("ai", { ...s.ai, autoGenerate: e.target.checked })} /> Buat draf otomatis dari Google Trends setiap hari (Vercel Cron, ±06:00 WIB)</label>
           <div className="flex items-center gap-2 text-sm">Jumlah draf per hari: <select className="admin-input w-20" value={s.ai.autoCount} onChange={(e) => set("ai", { ...s.ai, autoCount: Number(e.target.value) })}>{[1, 2, 3].map((n) => <option key={n}>{n}</option>)}</select></div>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={s.ai.autoPublish} onChange={(e) => set("ai", { ...s.ai, autoPublish: e.target.checked })} /> Langsung terbitkan hasil AI (tidak disarankan — default: simpan sebagai draf)</label>
+          <label className="admin-check text-sm"><input type="checkbox" checked={s.ai.autoPublish} onChange={(e) => set("ai", { ...s.ai, autoPublish: e.target.checked })} /> Langsung terbitkan hasil AI (tidak disarankan — default: simpan sebagai draf)</label>
           {!s.ai.hasToken && <p className="text-xs text-amber-700">Token AI belum diatur — otomasi tidak akan berjalan.</p>}
         </section>
         <section className="card space-y-3">
@@ -79,7 +85,7 @@ export default function SettingsForm() {
           <input type="password" className="admin-input" placeholder="Password saat ini" value={pw.current} onChange={(e) => setPw({ ...pw, current: e.target.value })} />
           <input type="password" className="admin-input" placeholder="Password baru (min. 10 karakter)" value={pw.next} onChange={(e) => setPw({ ...pw, next: e.target.value })} />
           <input type="password" className="admin-input" placeholder="Ulangi password baru" value={pw.confirm} onChange={(e) => setPw({ ...pw, confirm: e.target.value })} />
-          <div className="flex items-center gap-2"><button className="btn btn-dark" onClick={changePw}>Ganti Password</button><span className="text-sm">{pwMsg}</span></div>
+          <div className="flex items-center gap-2"><Btn className="btn btn-dark" busy={saving === "pw"} busyText="Memproses…" onClick={changePw}>Ganti Password</Btn><span className="text-sm">{pwMsg}</span></div>
         </section>
       </div>
     </div>

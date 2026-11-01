@@ -14,7 +14,7 @@ export const maxDuration = 120;
 export const POST = handle(async (req) => {
   const g = await adminGuard(req);
   if (g) return g;
-  const b = await body<{ action: string; id?: string; providerId?: string; keyword?: string; sourceUrls?: string[]; title?: string; body?: string; topic?: string; notes?: string; sourceUrl?: string; sources?: SourceLink[]; publish?: boolean }>(req);
+  const b = await body<{ action: string; id?: string; providerId?: string; keyword?: string; sourceUrls?: string[]; tags?: string[]; title?: string; body?: string; topic?: string; notes?: string; sourceUrl?: string; sources?: SourceLink[]; publish?: boolean }>(req);
   const s = await getSettings(true);
   if (b.action === "test") {
     const t0 = Date.now();
@@ -42,7 +42,7 @@ export const POST = handle(async (req) => {
   }
   if (b.action === "find_media") {
     if (!b.title) throw new Error("Isi judul dulu");
-    return Response.json(await findMedia({ title: b.title, keyword: b.keyword, sourceUrls: b.sourceUrls || [] }, s.media));
+    return Response.json(await findMedia({ title: b.title, keyword: b.keyword, tags: Array.isArray(b.tags) ? b.tags : [], sourceUrls: b.sourceUrls || [] }, s.media));
   }
   if (b.action === "generate") {
     const r = await generateDraft({ topic: b.topic, notes: b.notes, sourceUrl: b.sourceUrl || undefined, sources: b.sources, publish: b.publish === true });

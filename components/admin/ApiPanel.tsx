@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { api } from "./client";
+import { Btn } from "./ui";
 
 type K = { id: string; name: string; prefix: string; createdAt: string };
 
@@ -9,17 +10,27 @@ export default function ApiPanel() {
   const [name, setName] = useState("");
   const [fresh, setFresh] = useState("");
   const [origin, setOrigin] = useState("");
+  const [busy, setBusy] = useState("");
   useEffect(() => { setOrigin(window.location.origin); api("/api/admin/keys").then((r) => setKeys(r.keys)); }, []);
   async function create() {
-    const r = await api("/api/admin/keys", "POST", { name: name || "Bot" });
-    setKeys(r.keys); setFresh(r.key); setName("");
+    if (busy) return;
+    setBusy("create");
+    try {
+      const r = await api("/api/admin/keys", "POST", { name: name || "Bot" });
+      setKeys(r.keys); setFresh(r.key); setName("");
+    } catch (e) { alert((e as Error).message); } finally { setBusy(""); }
   }
   async function rename(k: K) {
     const n = prompt("Nama baru", k.name);
-    if (n) setKeys((await api("/api/admin/keys", "PATCH", { id: k.id, name: n })).keys);
+    if (!n) return;
+    setBusy(k.id);
+    try { setKeys((await api("/api/admin/keys", "PATCH", { id: k.id, name: n })).keys); } catch (e) { alert((e as Error).message); } finally { setBusy(""); }
   }
   async function revoke(k: K) {
-    if (confirm(`Cabut key "${k.name}"? Bot yang memakainya tidak bisa akses lagi.`)) setKeys((await api("/api/admin/keys", "DELETE", { id: k.id })).keys);
+    if (!confirm(`Cabut key "${k.name}"? Bot yang memakainya tidak bisa akses lagi.`)) return;
+    const prev = keys;
+    setKeys(keys.filter((x) => x.id !== k.id)); // optimistis
+    try { setKeys((await api("/api/admin/keys", "DELETE", { id: k.id })).keys); } catch (e) { setKeys(prev); alert((e as Error).message); }
   }
   const KEY = fresh || "av_KEY_ANDA";
   const code = (s: string) => <pre className="overflow-x-auto rounded bg-neutral-900 p-3 text-xs text-green-200">{s}</pre>;
@@ -28,23 +39,23 @@ export default function ApiPanel() {
       <h1 className="text-2xl font-black">🔑 API & Bot</h1>
       <section className="card space-y-3">
         <h2 className="font-bold">API Keys</h2>
-        <div className="flex gap-2"><input className="admin-input max-w-xs" placeholder="Nama key, mis. Bot Telegram" value={name} onChange={(e) => setName(e.target.value)} /><button className="btn btn-primary" onClick={create}>+ Buat Key</button></div>
+        <div className="flex flex-col gap-2 sm:flex-row"><input className="admin-input sm:max-w-xs" placeholder="Nama key, mis. Bot Telegram" value={name} onChange={(e) => setName(e.target.value)} /><Btn className="btn btn-primary" busy={busy === "create"} busyText="Membuat…" onClick={create}>+ Buat Key</Btn></div>
         {fresh && (
           <div className="rounded border border-green-300 bg-green-50 p-3 text-sm">
             <p className="font-bold">Key baru (hanya ditampilkan sekali — simpan sekarang):</p>
             <div className="mt-1 flex items-center gap-2"><code className="break-all rounded bg-white px-2 py-1">{fresh}</code><button className="btn btn-ghost" onClick={() => navigator.clipboard.writeText(fresh)}>Salin</button></div>
           </div>
         )}
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto"><table className="w-full min-w-[480px] text-sm">
           <thead className="text-left text-xs uppercase text-neutral-500"><tr><th className="py-1">Nama</th><th>Prefix</th><th>Dibuat</th><th></th></tr></thead>
           <tbody className="divide-y">
             {keys.map((k) => (
               <tr key={k.id}><td className="py-2">{k.name}</td><td className="font-mono text-xs">{k.prefix}</td><td className="text-xs">{new Date(k.createdAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })}</td>
-                <td className="text-right"><button className="mr-3 text-xs text-blue-700" onClick={() => rename(k)}>Ganti nama</button><button className="text-xs text-red-700" onClick={() => revoke(k)}>Cabut</button></td></tr>
+                <td className="text-right"><Btn className="tap mr-1 px-2 text-xs text-blue-700" busy={busy === k.id} onClick={() => rename(k)}>Ganti nama</Btn><button type="button" className="tap px-2 text-xs text-red-700" onClick={() => revoke(k)}>Cabut</button></td></tr>
             ))}
             {!keys.length && <tr><td colSpan={4} className="py-3 text-neutral-500">Belum ada key.</td></tr>}
           </tbody>
-        </table>
+        </table></div>
         <p className="text-xs text-neutral-500">Key disimpan dalam bentuk hash SHA-256; key asli tidak bisa dilihat lagi setelah dibuat.</p>
       </section>
 

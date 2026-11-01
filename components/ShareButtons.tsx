@@ -11,9 +11,9 @@ export default function ShareButtons({ url, title }: { url: string; title: strin
     <div className="mt-4 flex flex-wrap items-center gap-2" aria-label="Bagikan">
       <span className="text-xs font-bold uppercase text-neutral-500">Bagikan:</span>
       {items.map((i) => (
-        <a key={i.n} href={i.href} target="_blank" rel="noopener nofollow" className={`${i.c} rounded px-3 py-1.5 text-xs font-bold text-white hover:opacity-90`}>{i.n}</a>
+        <a key={i.n} href={i.href} target="_blank" rel="noopener nofollow" className={`${i.c} inline-flex min-h-9 items-center rounded px-3 text-xs font-bold text-white transition hover:opacity-90 active:scale-95`}>{i.n}</a>
       ))}
-      <button type="button" data-copy={url} className="rounded border border-neutral-300 px-3 py-1.5 text-xs font-bold hover:bg-neutral-50">🔗 Salin Tautan</button>
+      <button type="button" data-copy={url} className="inline-flex min-h-9 items-center rounded border border-neutral-300 px-3 text-xs font-bold transition hover:bg-neutral-50 active:scale-95 active:bg-neutral-100">🔗 Salin Tautan</button>
     </div>
   );
 }

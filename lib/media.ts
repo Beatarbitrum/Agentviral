@@ -2,6 +2,7 @@ import "server-only";
 import { putMedia } from "./blob";
 import { getArticle, getSettings, saveArticle } from "./store";
 import { runAll } from "./mediaProviders";
+import { ageDays, rank, scoreText, searchQuery, tooOld, topicOf } from "./relevance";
 import type { MediaRef, MediaSettings, SourceLink } from "./types";
 
 // Pencarian media otomatis untuk artikel: foto sampul, video/postingan sosial (YouTube, TikTok,
@@ -47,20 +48,33 @@ function socialLinks(html: string): string[] {
   return [...out].filter((u) => !/\/(intent|share|sharer)/.test(u));
 }
 
-export async function searchYouTube(q: string, n = 2): Promise<{ url: string; title: string }[]> {
-  const recent = await ytSearch(q, n, "EgIIBA%3D%3D"); // diunggah bulan ini
-  return recent.length ? recent : ytSearch(q, n);
+export type VideoHit = { url: string; title: string; desc?: string; date?: string };
+
+/** Pencarian YouTube tanpa API (scrape hasil pencarian): bulan ini + semua waktu, digabung. */
+export async function searchYouTube(q: string, n = 10): Promise<VideoHit[]> {
+  const [recent, all] = await Promise.all([ytSearch(q, n, "EgIIBA%3D%3D"), ytSearch(q, n)]);
+  const seen = new Set<string>();
+  return [...recent, ...all].filter((v) => (seen.has(v.url) ? false : (seen.add(v.url), true)));
 }
 
-async function ytSearch(q: string, n: number, sp?: string): Promise<{ url: string; title: string }[]> {
+const unq = (s: string) => { try { return JSON.parse(`"${s}"`) as string; } catch { return s; } };
+
+async function ytSearch(q: string, n: number, sp?: string): Promise<VideoHit[]> {
   try {
     const html = await getText(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}&hl=id&gl=ID${sp ? `&sp=${sp}` : ""}`, 9000);
-    const out: { url: string; title: string }[] = [];
+    const out: VideoHit[] = [];
     const seen = new Set<string>();
-    for (const m of html.matchAll(/"videoRenderer":\{"videoId":"([\w-]{11})"[\s\S]{0,1500}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/g)) {
-      if (seen.has(m[1])) continue;
-      seen.add(m[1]);
-      out.push({ url: `https://www.youtube.com/watch?v=${m[1]}`, title: JSON.parse(`"${m[2]}"`) });
+    for (const chunk of html.split('"videoRenderer":{"videoId":"').slice(1)) {
+      const id = chunk.slice(0, 11);
+      if (!/^[\w-]{11}$/.test(id) || seen.has(id)) continue;
+      const c = chunk.slice(0, 12000);
+      const t = c.match(/"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/);
+      if (!t) continue;
+      seen.add(id);
+      const date = c.match(/"publishedTimeText":\{"simpleText":"([^"]*)"/)?.[1];
+      const snip = c.match(/"(?:detailedMetadataSnippets|descriptionSnippet)":[\s\S]{0,40}?"runs":\[([\s\S]{0,1500}?)\]/)?.[1] || "";
+      const desc = [...snip.matchAll(/"text":"((?:[^"\\]|\\.)*)"/g)].map((m) => unq(m[1])).join("");
+      out.push({ url: `https://www.youtube.com/watch?v=${id}`, title: unq(t[1]), desc, date });
       if (out.length >= n) break;
     }
     return out;
@@ -69,16 +83,34 @@ async function ytSearch(q: string, n: number, sp?: string): Promise<{ url: strin
   }
 }
 
-async function newsSearch(q: string): Promise<{ url: string; title: string }[]> {
+/** Ambil judul/teks postingan lewat oEmbed publik (gratis, tanpa API key). */
+async function oembedText(u: string): Promise<string | undefined> {
+  let api = "";
+  if (/youtube\.com|youtu\.be/.test(u)) api = `https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(u)}`;
+  else if (/tiktok\.com/.test(u)) api = `https://www.tiktok.com/oembed?url=${encodeURIComponent(u)}`;
+  else if (/x\.com|twitter\.com/.test(u)) api = `https://publish.twitter.com/oembed?omit_script=1&lang=id&url=${encodeURIComponent(u.replace("x.com", "twitter.com"))}`;
+  if (!api) return undefined;
+  try {
+    const j = JSON.parse(await getText(api, 5000)) as { title?: string; author_name?: string; html?: string };
+    const text = [j.title, j.html ? decode(j.html.replace(/<[^>]+>/g, " ")) : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function newsSearch(q: string): Promise<VideoHit[]> {
   try {
     const xml = await getText(`https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&setlang=id&cc=ID`, 9000);
-    const out: { url: string; title: string }[] = [];
+    const out: VideoHit[] = [];
     for (const it of xml.split("<item>").slice(1)) {
       const t = it.match(/<title>([\s\S]*?)<\/title>/)?.[1] || "";
       let l = decode(it.match(/<link>([\s\S]*?)<\/link>/)?.[1] || "");
       const u = l.match(/[?&]url=([^&]+)/);
       if (u) l = decodeURIComponent(u[1]);
-      if (/^https?:/.test(l)) out.push({ url: l, title: decode(t).trim() });
+      const desc = decode(it.match(/<description>([\s\S]*?)<\/description>/)?.[1] || "").replace(/<[^>]+>/g, " ");
+      const date = it.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1];
+      if (/^https?:/.test(l)) out.push({ url: l, title: decode(t).trim(), desc, date });
     }
     return out;
   } catch {
@@ -140,22 +172,34 @@ function platformOf(u: string) {
   return Object.keys(PLATFORM_RE).find((k) => PLATFORM_RE[k].test(u));
 }
 
-export async function findMedia(input: { title: string; keyword?: string; sourceUrls?: string[] }, cfg?: MediaSettings): Promise<FoundMedia> {
+type Origin = "search" | "source" | "related";
+type Cand = { url: string; platform: string; text?: string; date?: string; origin: Origin; strongPage?: boolean };
+
+export async function findMedia(input: { title: string; keyword?: string; tags?: string[]; sourceUrls?: string[] }, cfg?: MediaSettings): Promise<FoundMedia> {
   const m = cfg || (await getSettings()).media;
-  const base = (input.keyword && input.keyword.length > 3 ? input.keyword : input.title).slice(0, 120);
+  const topic = topicOf(input.title, { keyword: input.keyword, tags: input.tags });
+  // Kueri dibangun dari entitas kunci judul (nama diri, singkatan, angka, kata kunci utama)
+  const base = searchQuery(input.title, { keyword: input.keyword, tags: input.tags }).slice(0, 120);
   const q = `${base} ${m.extraKeywords || ""}`.trim();
   const blocked = (m.blockedDomains || "").split(/[,\s]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
   const okHost = (u: string) => { try { const h = new URL(u).hostname.toLowerCase(); return !blocked.some((b) => h === b || h.endsWith(`.${b}`)); } catch { return false; } };
-  const log: string[] = [];
+  const log: string[] = [`Kueri: "${q}"`];
   const t0 = Date.now();
-  const videos: string[] = [];
-  const social: string[] = [];
-  const addEmbed = (u: string) => {
+  const cands = new Map<string, Cand>();
+  const addCand = (u: string, origin: Origin, extra: Partial<Cand> = {}) => {
     const n = normSocial(u);
     const p = platformOf(n);
     if (!p || !m.platforms[p as keyof MediaSettings["platforms"]] || !okHost(n)) return;
-    if (p === "youtube") { if (!videos.includes(n) && videos.length < m.maxVideos) videos.push(n); }
-    else if (!social.includes(n) && social.length < m.maxSocial) social.push(n);
+    const prev = cands.get(n);
+    if (prev) {
+      // gabungkan informasi: teks dari pencarian, asal paling tepercaya
+      if (!prev.text && extra.text) prev.text = extra.text;
+      if (!prev.date && extra.date) prev.date = extra.date;
+      if (origin === "source") prev.origin = "source";
+      if (extra.strongPage) prev.strongPage = true;
+      return;
+    }
+    cands.set(n, { url: n, platform: p, origin, ...extra });
   };
   const sources: SourceLink[] = [];
   let cover: MediaRef | undefined;
@@ -179,12 +223,12 @@ export async function findMedia(input: { title: string; keyword?: string; source
   // 0) Foto stok dulu bila dipilih
   if (m.coverMode === "stock") await stockCover();
 
-  // 1) Halaman sumber: og:image + postingan yang disematkan
+  // 1) Halaman sumber artikel: og:image + postingan yang disematkan (tepercaya: artikel ditulis dari sini)
   const srcUrls = (input.sourceUrls || []).filter((u) => /^https?:/.test(u)).slice(0, 3);
   const pages = await Promise.all(srcUrls.map(async (u) => ({ u, html: await getText(u).catch(() => "") })));
   for (const { u, html } of pages) {
     if (!html) continue;
-    socialLinks(html).forEach(addEmbed);
+    socialLinks(html).slice(0, 8).forEach((x) => addCand(x, "source"));
     if (m.coverMode !== "off" && !cover) {
       const img = meta(html, "og:image") || meta(html, "twitter:image") || meta(html, "twitter:image:src");
       if (img) {
@@ -201,19 +245,24 @@ export async function findMedia(input: { title: string; keyword?: string; source
     m.maxSocial || m.maxVideos ? runAll(providers.filter((p) => p.type !== "youtube"), "videos", q, log) : Promise.resolve([]),
     m.maxSocial && socialPlatforms.length ? Promise.all(socialPlatforms.map((p) => runAll(providers, "web", `${q} site:${SITE[p]}`, log))).then((x) => x.flat()) : Promise.resolve([]),
     m.maxRefs ? runAll(providers, "news", q, log) : Promise.resolve([]),
-    m.platforms.youtube && m.maxVideos ? searchYouTube(q, m.maxVideos) : Promise.resolve([]),
+    m.platforms.youtube && m.maxVideos ? searchYouTube(q, 10) : Promise.resolve([]),
     m.maxRefs ? newsSearch(q) : Promise.resolve([]),
   ]);
-  [...ytApi, ...ytScrape].forEach((v) => addEmbed(v.url));
-  [...webApi, ...vidApi].forEach((v) => addEmbed(v.url));
+  for (const v of [...ytApi, ...ytScrape, ...webApi, ...vidApi] as VideoHit[]) addCand(v.url, "search", { text: `${v.title} ${v.desc || ""}`, date: v.date });
 
-  const srcHosts = new Set(srcUrls.map((u) => new URL(u).hostname));
-  for (const r of [...newsApi, ...newsFree]) {
+  // Referensi berita: hanya yang judulnya benar-benar membahas topik yang sama
+  const srcHosts = new Set(srcUrls.map((u) => { try { return new URL(u).hostname; } catch { return ""; } }));
+  const strongRefs = new Set<string>();
+  let rejectedRefs = 0;
+  for (const r of [...newsApi, ...newsFree] as VideoHit[]) {
     if (sources.length >= m.maxRefs) break;
     let h = "";
     try { h = new URL(r.url).hostname; } catch { continue; }
     if (!okHost(r.url) || srcHosts.has(h) || /(youtube|tiktok|instagram|facebook|x\.com|twitter|wikipedia|pinterest|msn\.com)/.test(h)) continue;
+    const sc = scoreText(topic, `${r.title} ${r.desc || ""}`);
+    if (!sc.pass) { rejectedRefs++; continue; }
     srcHosts.add(h);
+    if (sc.shared >= 3 || sc.ratio >= 0.6) strongRefs.add(r.url);
     sources.push({ title: `${h.replace(/^www\./, "")}: ${r.title}`.slice(0, 160), url: r.url });
   }
 
@@ -221,7 +270,7 @@ export async function findMedia(input: { title: string; keyword?: string; source
   const related = Date.now() - t0 < 30_000 ? await Promise.all(sources.map(async (s) => ({ u: s.url, html: await getText(s.url, 7000).catch(() => "") }))) : [];
   for (const { u, html } of related) {
     if (!html) continue;
-    socialLinks(html).forEach(addEmbed);
+    socialLinks(html).slice(0, 6).forEach((x) => addCand(x, "related", { strongPage: strongRefs.has(u) }));
     if (m.coverMode === "source" && !cover) {
       const img = meta(html, "og:image") || meta(html, "twitter:image");
       if (img) {
@@ -232,13 +281,45 @@ export async function findMedia(input: { title: string; keyword?: string; source
     }
   }
 
-  // 4) Cadangan: foto stok, lalu Wikimedia Commons
+  // 4) Verifikasi: kandidat tanpa teks dicek judulnya lewat oEmbed publik (gratis)
+  const noText = [...cands.values()].filter((c) => !c.text).slice(0, 12);
+  if (noText.length && Date.now() - t0 < 45_000) {
+    const texts = await Promise.all(noText.map((c) => oembedText(c.url)));
+    noText.forEach((c, i) => { if (texts[i]) c.text = texts[i]; });
+  }
+
+  // 5) Saring ketat + urutkan (kecocokan kata kunci, lalu kebaruan)
+  const accepted: { c: Cand; r: number }[] = [];
+  let rejected = 0;
+  for (const c of cands.values()) {
+    if (c.text) {
+      const sc = scoreText(topic, c.text);
+      const age = ageDays(c.date);
+      if (!sc.pass || tooOld(sc, age)) { rejected++; continue; }
+      accepted.push({ c, r: rank(sc, age) + (c.origin === "source" ? 1 : 0) });
+    } else if (c.origin === "source" || (c.origin === "related" && c.strongPage)) {
+      // Tidak bisa dibaca teksnya (mis. Instagram/Facebook): hanya diterima bila disematkan
+      // oleh halaman sumber artikel sendiri, atau berita terkait yang judulnya sangat cocok.
+      accepted.push({ c, r: c.origin === "source" ? 1.5 : 0.5 });
+    } else rejected++;
+  }
+  accepted.sort((a, b) => b.r - a.r);
+  const videos: string[] = [];
+  const social: string[] = [];
+  for (const { c } of accepted) {
+    if (c.platform === "youtube") { if (videos.length < m.maxVideos) videos.push(c.url); }
+    else if (social.length < m.maxSocial) social.push(c.url);
+  }
+
+  // 6) Cadangan sampul: foto stok, lalu Wikimedia Commons
   if (m.coverMode !== "off") await stockCover();
   if (m.coverMode !== "off" && !cover && Date.now() - t0 < 40_000) {
     const c = await commonsImage(base);
     if (c) { await tryCover(c.url, c.alt || base, c.credit || "Wikimedia Commons"); if (cover) log.push("Sampul dari Wikimedia Commons"); }
   }
   log.push(`${videos.length} video YouTube, ${social.length} postingan sosial, ${sources.length} referensi`);
+  if (rejected || rejectedRefs) log.push(`${rejected} video & ${rejectedRefs} referensi ditolak karena tidak cocok dengan judul`);
+  if (!videos.length && !social.length) log.push("Tidak ada video yang cukup cocok — dibiarkan kosong");
   return { cover, embeds: [...videos, ...social], sources, log };
 }
 
@@ -246,11 +327,11 @@ export async function findMedia(input: { title: string; keyword?: string; source
 export async function enrichArticle(id: string) {
   const a = await getArticle(id, true);
   if (!a) throw new Error("Artikel tidak ditemukan");
-  const found = await findMedia({ title: a.title, keyword: a.seo?.focusKeyword, sourceUrls: a.sources.map((s) => s.url) });
+  const found = await findMedia({ title: a.title, keyword: a.seo?.focusKeyword, tags: a.tags, sourceUrls: a.sources.map((s) => s.url) });
   const embeds = Array.from(new Set([...(a.embeds || []), ...found.embeds]));
   const have = new Set(a.sources.map((s) => s.url));
   const sources = [...a.sources, ...found.sources.filter((s) => !have.has(s.url))];
-  const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = a; // eslint-disable-line @typescript-eslint/no-unused-vars
-  const art = await saveArticle({ ...rest, cover: a.cover?.url ? a.cover : found.cover, embeds, sources } as Parameters<typeof saveArticle>[0], id);
+  // Simpan hanya field yang berubah — artikel lain yang diedit bersamaan tidak tertimpa
+  const art = await saveArticle({ cover: a.cover?.url ? a.cover : found.cover, embeds, sources }, id);
   return { article: art, found };
 }

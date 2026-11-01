@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "./client";
+import { Btn, Spinner } from "./ui";
 
 const PROVIDERS = [
   ["openai", "OpenAI", "auto"],
@@ -26,13 +27,16 @@ export default function AiPanel() {
   const [mMsg, setMMsg] = useState("");
   const [media, setMedia] = useState("");
   const [autoMedia, setAutoMedia] = useState(true);
+  const [saving, setSaving] = useState(false);
   useEffect(() => { api("/api/admin/settings").then((r) => { setAi(r.settings.ai); setAutoMedia(r.settings.media?.autoAfterAi !== false); }); }, []);
-  if (!ai) return <p>Memuat…</p>;
+  if (!ai) return <p className="flex items-center gap-2 text-neutral-500"><Spinner /> Memuat…</p>;
   async function save(extra: Record<string, unknown> = {}) {
+    if (saving) return;
+    setSaving(true); setMsg("");
     try {
       const r = await api("/api/admin/settings", "PUT", { ai: { provider: ai!.provider, model: ai!.model, baseUrl: ai!.baseUrl || "", ...(token ? { token } : {}), ...extra } });
       setAi(r.settings.ai); setToken(""); setMsg("Tersimpan ✓");
-    } catch (e) { setMsg((e as Error).message); }
+    } catch (e) { setMsg((e as Error).message); } finally { setSaving(false); }
   }
   async function runTest() {
     setTest("Menguji…");
@@ -69,7 +73,7 @@ export default function AiPanel() {
           </div>
           <div>
             <label className="admin-label">Model</label>
-            <label className="mb-2 flex items-center gap-2 text-sm"><input type="checkbox" checked={!ai.model || ai.model === "auto"} onChange={(e) => setAi({ ...ai, model: e.target.checked ? "auto" : (models[0] || "") })} /> Otomatis (pilih model terbaik yang tersedia untuk token ini)</label>
+            <label className="admin-check mb-2 text-sm"><input type="checkbox" checked={!ai.model || ai.model === "auto"} onChange={(e) => setAi({ ...ai, model: e.target.checked ? "auto" : (models[0] || "") })} /> Otomatis (pilih model terbaik yang tersedia untuk token ini)</label>
             {ai.model && ai.model !== "auto" && (
               <>
                 {models.length > 0 ? (
@@ -83,7 +87,7 @@ export default function AiPanel() {
               </>
             )}
             <div className="mt-1 flex items-center gap-2">
-              <button type="button" className="text-xs underline" onClick={loadModels} disabled={!ai.hasToken}>Lihat model yang tersedia</button>
+              <button type="button" className="tap px-1 text-xs underline" onClick={loadModels} disabled={!ai.hasToken}>Lihat model yang tersedia</button>
               {mMsg && <span className="text-xs text-neutral-500">{mMsg}</span>}
             </div>
             <p className="mt-1 text-xs text-neutral-500">Mode otomatis juga pindah ke model lain bila model lama dipensiunkan provider.</p>
@@ -91,13 +95,13 @@ export default function AiPanel() {
           {ai.provider === "custom" && <div><label className="admin-label">Base URL (tanpa /chat/completions)</label><input className="admin-input font-mono text-sm" placeholder="https://api.contoh.com/v1" value={ai.baseUrl || ""} onChange={(e) => setAi({ ...ai, baseUrl: e.target.value })} /></div>}
           <div>
             <label className="admin-label">API Token</label>
-            {ai.hasToken && <p className="mb-1 font-mono text-sm">Tersimpan: {ai.tokenMasked} <button className="ml-2 text-xs text-red-700" onClick={() => confirm("Hapus token AI?") && save({ deleteToken: true })}>Hapus</button></p>}
+            {ai.hasToken && <p className="mb-1 font-mono text-sm">Tersimpan: {ai.tokenMasked} <button type="button" className="tap ml-2 px-2 text-xs text-red-700" onClick={() => confirm("Hapus token AI?") && save({ deleteToken: true })}>Hapus</button></p>}
             <input type="password" autoComplete="off" className="admin-input font-mono text-sm" placeholder={ai.hasToken ? "Tempel token baru untuk mengganti" : "Tempel token API"} value={token} onChange={(e) => setToken(e.target.value)} />
             <p className="mt-1 text-xs text-neutral-500">Token dienkripsi (AES-256-GCM) di server dan tidak pernah dikirim utuh ke browser.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <button className="btn btn-primary" onClick={() => save()}>Simpan</button>
-            <button className="btn btn-ghost" onClick={runTest} disabled={!ai.hasToken}>Tes koneksi</button>
+            <Btn className="btn btn-primary" busy={saving} busyText="Menyimpan…" onClick={() => save()}>Simpan</Btn>
+            <Btn className="btn btn-ghost" busy={test === "Menguji…"} onClick={runTest} disabled={!ai.hasToken}>Tes koneksi</Btn>
             <span className="text-sm">{msg}</span>
           </div>
           {test && <p className="rounded bg-neutral-50 p-2 text-sm">{test}</p>}
@@ -108,8 +112,8 @@ export default function AiPanel() {
           <div><label className="admin-label">Topik</label><input className="admin-input" value={w.topic} onChange={(e) => setW({ ...w, topic: e.target.value })} placeholder="mis. Tren kuliner baru di media sosial" /></div>
           <div><label className="admin-label">URL sumber (opsional)</label><input className="admin-input" value={w.sourceUrl} onChange={(e) => setW({ ...w, sourceUrl: e.target.value })} placeholder="https://…" /></div>
           <div><label className="admin-label">Catatan / fakta (opsional)</label><textarea className="admin-input" rows={5} value={w.notes} onChange={(e) => setW({ ...w, notes: e.target.value })} placeholder="Fakta, kutipan, angka yang sudah diverifikasi…" /></div>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={w.publish} onChange={(e) => setW({ ...w, publish: e.target.checked })} /> Langsung terbitkan (default: draf)</label>
-          <button className="btn btn-dark" disabled={busy || !ai.hasToken} onClick={generate}>{busy ? "AI sedang menulis… (±20–50 dtk)" : "Buat Artikel"}</button>
+          <label className="admin-check text-sm"><input type="checkbox" checked={w.publish} onChange={(e) => setW({ ...w, publish: e.target.checked })} /> Langsung terbitkan (default: draf)</label>
+          <Btn className="btn btn-dark w-full sm:w-auto" busy={busy} busyText="AI sedang menulis… (±20–50 dtk)" disabled={!ai.hasToken} onClick={generate}>Buat Artikel</Btn>
           {!ai.hasToken && <p className="text-xs text-amber-700">Simpan token AI terlebih dahulu.</p>}
           {err && <p className="rounded bg-red-50 p-2 text-sm text-red-700">{err}</p>}
           {result && (

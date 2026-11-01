@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import { slugifyClient } from "./client";
+import { Spinner } from "./ui";
 
 export async function uploadFile(file: File, onProgress?: (p: number) => void): Promise<string> {
   const d = new Date();
@@ -49,7 +50,7 @@ export default function Uploader({ accept = "image/*", multiple = false, label =
   return (
     <span className="inline-flex items-center gap-2">
       <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => ref.current?.click()}>
-        {busy ? `Mengunggah… ${pct}%` : `⬆ ${label}`}
+        {busy ? <><Spinner /> Mengunggah… {pct}%</> : `⬆ ${label}`}
       </button>
       <input ref={ref} type="file" accept={accept} multiple={multiple} hidden onChange={(e) => go(e.target.files)} />
       {err && <span className="text-xs text-red-600">{err}</span>}

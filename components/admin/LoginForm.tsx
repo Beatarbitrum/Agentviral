@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { api } from "./client";
+import { Spinner } from "./ui";
 
 export default function LoginForm() {
   const [err, setErr] = useState("");
@@ -12,10 +13,9 @@ export default function LoginForm() {
     setErr("");
     try {
       await api("/api/admin/login", "POST", { username: f.get("username"), password: f.get("password") });
-      window.location.href = "/admin";
+      window.location.href = "/admin"; // biarkan tombol tetap "Memeriksa…" sampai halaman berganti
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
       setBusy(false);
     }
   }
@@ -30,7 +30,7 @@ export default function LoginForm() {
         <input id="p" name="password" type="password" className="admin-input" autoComplete="current-password" required />
       </div>
       {err && <p className="rounded bg-red-50 p-2 text-sm text-red-700">{err}</p>}
-      <button className="btn btn-primary w-full" disabled={busy}>{busy ? "Memeriksa…" : "Masuk"}</button>
+      <button className="btn btn-primary w-full" disabled={busy}>{busy ? <><Spinner /> Memeriksa…</> : "Masuk"}</button>
     </form>
   );
 }

@@ -124,6 +124,9 @@ function tagNameFromSlug(slug: string, raw: string[] | undefined) {
 }
 
 export async function saveArticle(input: ArticleInput, id?: string): Promise<Article> {
+  // Baca artikel & indeks secara paralel (dulu berurutan) — hemat satu round-trip ke database.
+  const idxRead = readDoc<SiteIndex>("index.json", EMPTY_INDEX, { fresh: true });
+  idxRead.catch(() => {}); // cegah unhandled rejection bila artikel tidak ditemukan
   const base = id ? await getArticle(id, true) : null;
   if (id && !base) throw new Error("Artikel tidak ditemukan");
   const art = normalize(input, base ?? undefined);
@@ -144,7 +147,7 @@ export async function saveArticle(input: ArticleInput, id?: string): Promise<Art
     if (i >= 0) idx.articles[i] = s;
     else idx.articles.unshift(s);
     return idx;
-  });
+  }, idxRead);
   await writeDoc(`articles/${art.id}.json`, art);
   return art;
 }

@@ -37,7 +37,7 @@ export function CardRow({ a, cats }: { a: ArticleSummary; cats: Category[] }) {
         </h3>
         {a.excerpt && <p className="mt-1 hidden line-clamp-2 text-sm text-neutral-600 sm:block">{a.excerpt}</p>}
         <p className="mt-1 text-xs text-neutral-500">
-          {formatTanggal(a.publishAt)} · {a.readingTime} menit baca{a.hasProof ? " · 🎥 Bukti Viral" : ""}
+          {formatTanggal(a.publishAt)} · {a.readingTime} menit baca{a.hasProof ? " · 📹 Ada video" : ""}
         </p>
       </div>
     </article>
